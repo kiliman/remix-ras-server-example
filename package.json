@@ -1,0 +1,34 @@
+{
+  "private": true,
+  "sideEffects": false,
+  "scripts": {
+    "postinstall": "patch-package",
+    "build": "remix build && esbuild --format=cjs --platform=node --outfile=build/server.js server.ts",
+    "dev": "remix dev",
+    "start": "remix-serve build build/server.js"
+  },
+  "dependencies": {
+    "@remix-run/node": "^1.7.0",
+    "@remix-run/react": "^1.7.0",
+    "@remix-run/serve": "^1.7.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@remix-run/dev": "^1.7.0",
+    "@remix-run/eslint-config": "^1.7.0",
+    "@types/compression": "^1.7.2",
+    "@types/express": "^4.17.13",
+    "@types/morgan": "^1.9.3",
+    "@types/react": "^18.0.15",
+    "@types/react-dom": "^18.0.6",
+    "@types/ws": "^8.5.3",
+    "eslint": "^8.20.0",
+    "patch-package": "^6.4.7",
+    "typescript": "^4.7.4",
+    "ws": "^8.8.1"
+  },
+  "engines": {
+    "node": ">=14"
+  }
+}

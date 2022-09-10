@@ -1,0 +1,79 @@
+diff --git a/node_modules/@remix-run/serve/dist/cli.js b/node_modules/@remix-run/serve/dist/cli.js
+index 76635af..49dd0b0 100755
+--- a/node_modules/@remix-run/serve/dist/cli.js
++++ b/node_modules/@remix-run/serve/dist/cli.js
+@@ -24,31 +24,59 @@ var os__default = /*#__PURE__*/_interopDefaultLegacy(os);
+ let port = process.env.PORT ? Number(process.env.PORT) : 3000;
+ if (Number.isNaN(port)) port = 3000;
+ let buildPathArg = process.argv[2];
++let serverEntryFile = process.argv[3];
+ 
+ if (!buildPathArg) {
+   console.error(`
+-  Usage: remix-serve <build-dir>`);
++  Usage: remix-serve <build-dir> [server-entry-file]`);
+   process.exit(1);
+ }
+ 
+ let buildPath = path__default["default"].resolve(process.cwd(), buildPathArg);
+ 
+-let onListen = () => {
+-  var _Object$values$flat$f;
+-
+-  let address = process.env.HOST || ((_Object$values$flat$f = Object.values(os__default["default"].networkInterfaces()).flat().find(ip => String(ip === null || ip === void 0 ? void 0 : ip.family).includes("4") && !(ip !== null && ip !== void 0 && ip.internal))) === null || _Object$values$flat$f === void 0 ? void 0 : _Object$values$flat$f.address);
+-
+-  if (!address) {
+-    console.log(`Remix App Server started at http://localhost:${port}`);
+-  } else {
+-    console.log(`Remix App Server started at http://localhost:${port} (http://${address}:${port})`);
+-  }
+-};
+-
+ let build = require(buildPath);
+ 
+-let app = index.createApp(buildPath, process.env.NODE_ENV, build.publicPath, build.assetsBuildDirectory);
+-let server = process.env.HOST ? app.listen(port, process.env.HOST, onListen) : app.listen(port, onListen);
++let {
++  createApp,
++  createServer
++} = getServerEntry({
++  serverEntryFile
++});
++let app = createApp(buildPath, process.env.NODE_ENV, build.publicPath, build.assetsBuildDirectory);
++let server = createServer(app, port);
+ ["SIGTERM", "SIGINT"].forEach(signal => {
+   process.once(signal, () => server === null || server === void 0 ? void 0 : server.close(console.error));
+ });
++
++function getServerEntry(config) {
++  if (config.serverEntryFile) {
++    let entry = require(path__default["default"].resolve(serverEntryFile));
++
++    return {
++      createApp: entry.createApp,
++      createServer: entry.createServer ?? createDefaultServer
++    };
++  }
++
++  return {
++    createApp: index.createApp,
++    createServer: createDefaultServer
++  };
++}
++
++function createDefaultServer(app, port) {
++  let onListen = () => {
++    var _Object$values$flat$f;
++
++    let address = process.env.HOST || ((_Object$values$flat$f = Object.values(os__default["default"].networkInterfaces()).flat().find(ip => String(ip === null || ip === void 0 ? void 0 : ip.family).includes("4") && !(ip !== null && ip !== void 0 && ip.internal))) === null || _Object$values$flat$f === void 0 ? void 0 : _Object$values$flat$f.address);
++
++    if (!address) {
++      console.log(`Remix App Server started at http://localhost:${port}`);
++    } else {
++      console.log(`Remix App Server started at http://localhost:${port} (http://${address}:${port})`);
++    }
++  };
++
++  let server = process.env.HOST ? app.listen(port, process.env.HOST, onListen) : app.listen(port, onListen);
++  return server;
++}

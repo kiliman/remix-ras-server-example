@@ -1,0 +1,498 @@
+diff --git a/node_modules/@remix-run/dev/dist/cli/commands.js b/node_modules/@remix-run/dev/dist/cli/commands.js
+index 31e6d43..455ef69 100644
+--- a/node_modules/@remix-run/dev/dist/cli/commands.js
++++ b/node_modules/@remix-run/dev/dist/cli/commands.js
+@@ -20,6 +20,7 @@ var exitHook = require('exit-hook');
+ var ora = require('ora');
+ var prettyMs = require('pretty-ms');
+ var WebSocket = require('ws');
++var express = require('express');
+ var getPort = require('get-port');
+ var esbuild = require('esbuild');
+ var build$1 = require('../build.js');
+@@ -63,6 +64,7 @@ var exitHook__default = /*#__PURE__*/_interopDefaultLegacy(exitHook);
+ var ora__default = /*#__PURE__*/_interopDefaultLegacy(ora);
+ var prettyMs__default = /*#__PURE__*/_interopDefaultLegacy(prettyMs);
+ var WebSocket__default = /*#__PURE__*/_interopDefaultLegacy(WebSocket);
++var express__default = /*#__PURE__*/_interopDefaultLegacy(express);
+ var getPort__default = /*#__PURE__*/_interopDefaultLegacy(getPort);
+ var esbuild__namespace = /*#__PURE__*/_interopNamespace(esbuild);
+ 
+@@ -194,9 +196,10 @@ async function watch(remixRootOrConfig, modeArg, callbacks) {
+   console.log(`Watching Remix app in ${mode} mode...`);
+   let start = Date.now();
+   let config$1 = typeof remixRootOrConfig === "object" ? remixRootOrConfig : await config.readConfig(remixRootOrConfig);
+-  let wss = new WebSocket__default["default"].Server({
+-    port: config$1.devServerPort
+-  });
++  let {
++    createSocketServer
++  } = getServerEntry(config$1);
++  let wss = createSocketServer(config$1.devServerPort);
+ 
+   function broadcast(event) {
+     setTimeout(() => {
+@@ -262,55 +265,28 @@ async function watch(remixRootOrConfig, modeArg, callbacks) {
+   });
+ }
+ async function dev(remixRoot, modeArg, portArg) {
+-  let createApp;
+-  let express;
+-
+-  try {
+-    // eslint-disable-next-line import/no-extraneous-dependencies
+-    let serve = require("@remix-run/serve");
+-
+-    createApp = serve.createApp;
+-    express = require("express");
+-  } catch (err) {
+-    throw new Error("Could not locate @remix-run/serve. Please verify you have it installed " + "to use the dev command.");
+-  }
+-
+   let config$1 = await config.readConfig(remixRoot);
+   let mode = build$1.isBuildMode(modeArg) ? modeArg : build$1.BuildMode.Development;
+   await env.loadEnv(config$1.rootDirectory);
+-  let port = await getPort__default["default"]({
+-    port: portArg ? Number(portArg) : process.env.PORT ? Number(process.env.PORT) : getPort.makeRange(3000, 3100)
+-  });
+ 
+   if (config$1.serverEntryPoint) {
+     throw new Error("remix dev is not supported for custom servers.");
+   }
+ 
+-  let app = express();
+-  app.disable("x-powered-by");
+-  app.use((_, __, next) => {
+-    purgeAppRequireCache(config$1.serverBuildPath);
+-    next();
+-  });
+-  app.use(createApp(config$1.serverBuildPath, mode, config$1.publicPath, config$1.assetsBuildDirectory));
++  let {
++    createApp,
++    createServer
++  } = getServerEntry(config$1);
++  let app = createApp(config$1.serverBuildPath, mode, config$1.publicPath, config$1.assetsBuildDirectory);
+   let server = null;
++  let port = await getPort__default["default"]({
++    port: portArg ? Number(portArg) : process.env.PORT ? Number(process.env.PORT) : getPort.makeRange(3000, 3100)
++  });
+ 
+   try {
+     await watch(config$1, mode, {
+       onInitialBuild: () => {
+-        let onListen = () => {
+-          var _Object$values$flat$f;
+-
+-          let address = process.env.HOST || ((_Object$values$flat$f = Object.values(os__default["default"].networkInterfaces()).flat().find(ip => String(ip === null || ip === void 0 ? void 0 : ip.family).includes("4") && !(ip !== null && ip !== void 0 && ip.internal))) === null || _Object$values$flat$f === void 0 ? void 0 : _Object$values$flat$f.address);
+-
+-          if (!address) {
+-            console.log(`Remix App Server started at http://localhost:${port}`);
+-          } else {
+-            console.log(`Remix App Server started at http://localhost:${port} (http://${address}:${port})`);
+-          }
+-        };
+-
+-        server = process.env.HOST ? app.listen(port, process.env.HOST, onListen) : app.listen(port, onListen);
++        server = createServer(app, port);
+       }
+     });
+   } finally {
+@@ -328,6 +304,80 @@ function purgeAppRequireCache(buildPath) {
+   }
+ }
+ 
++function getServerEntry(config) {
++  if (config.serverEntryFile) {
++    var _config$serverEntryFi;
++
++    let serverEntryFile = config.serverEntryFile;
++
++    if ((_config$serverEntryFi = config.serverEntryFile) !== null && _config$serverEntryFi !== void 0 && _config$serverEntryFi.endsWith(".ts")) {
++      serverEntryFile = path__namespace.join(path__namespace.dirname(config.serverBuildPath), "server.js");
++      esbuild__namespace.buildSync({
++        entryPoints: [config.serverEntryFile],
++        outfile: serverEntryFile,
++        target: "node16",
++        format: "cjs"
++      });
++    }
++
++    let entry = require(path__namespace.resolve(serverEntryFile));
++
++    return {
++      createApp: entry.createApp,
++      createServer: entry.createServer ?? createDefaultServer,
++      createSocketServer: entry.createSocketServer ?? createDefaultSocketServer
++    };
++  }
++
++  return {
++    createApp: createDefaultApp,
++    createServer: createDefaultServer,
++    createSocketServer: createDefaultSocketServer
++  };
++}
++
++function createDefaultApp(buildPath, mode = "production", publicPath = "/build/", assetsBuildDirectory = "public/build/") {
++  try {
++    // eslint-disable-next-line import/no-extraneous-dependencies
++    let serve = require("@remix-run/serve");
++
++    let app = express__default["default"]();
++    app.disable("x-powered-by");
++    app.use((_, __, next) => {
++      purgeAppRequireCache(buildPath);
++      next();
++    });
++    app.use(serve.createApp(buildPath, mode, publicPath, assetsBuildDirectory));
++    return app;
++  } catch (err) {
++    throw new Error("Could not locate @remix-run/serve. Please verify you have it installed " + "to use the dev command.");
++  }
++}
++
++function createDefaultServer(app, port) {
++  let onListen = () => {
++    var _Object$values$flat$f;
++
++    let address = process.env.HOST || ((_Object$values$flat$f = Object.values(os__default["default"].networkInterfaces()).flat().find(ip => String(ip === null || ip === void 0 ? void 0 : ip.family).includes("4") && !(ip !== null && ip !== void 0 && ip.internal))) === null || _Object$values$flat$f === void 0 ? void 0 : _Object$values$flat$f.address);
++
++    if (!address) {
++      console.log(`Remix App Server started at http://localhost:${port}`);
++    } else {
++      console.log(`Remix App Server started at http://localhost:${port} (http://${address}:${port})`);
++    }
++  };
++
++  let server = process.env.HOST ? app.listen(port, process.env.HOST, onListen) : app.listen(port, onListen);
++  return server;
++}
++
++function createDefaultSocketServer(port) {
++  let wss = new WebSocket__default["default"].Server({
++    port
++  });
++  return wss;
++}
++
+ exports.build = build;
+ exports.create = create;
+ exports.dev = dev;
+diff --git a/node_modules/@remix-run/dev/dist/cli/migrate/migrations/convert-to-javascript/transform/createExportExpressionStatementFromExportDefaultDeclaration.js b/node_modules/@remix-run/dev/dist/cli/migrate/migrations/convert-to-javascript/transform/createExportExpressionStatementFromExportDefaultDeclaration.js
+new file mode 100644
+index 0000000..cfaebf3
+--- /dev/null
++++ b/node_modules/@remix-run/dev/dist/cli/migrate/migrations/convert-to-javascript/transform/createExportExpressionStatementFromExportDefaultDeclaration.js
+@@ -0,0 +1,38 @@
++/**
++ * @remix-run/dev v1.7.0
++ *
++ * Copyright (c) Remix Software Inc.
++ *
++ * This source code is licensed under the MIT license found in the
++ * LICENSE.md file in the root directory of this source tree.
++ *
++ * @license MIT
++ */
++'use strict';
++
++Object.defineProperty(exports, '__esModule', { value: true });
++
++/**
++ * export default foo
++ * =>
++ * module.exports = foo
++ */
++const createExportExpressionStatementFromExportDefaultDeclaration = (j, exportDefaultDeclaration) => {
++  /**
++   * HACK: Can't use casts nor type guards in a `jscodeshift` transform
++   * https://github.com/facebook/jscodeshift/issues/467
++   *
++   * So to narrow declaration type, we check it against all possible
++   * `DeclarationKind` values instead.
++   */
++  if (exportDefaultDeclaration.declaration.type === "ClassBody" || exportDefaultDeclaration.declaration.type === "ClassMethod" || exportDefaultDeclaration.declaration.type === "ClassPrivateMethod" || exportDefaultDeclaration.declaration.type === "ClassPrivateProperty" || exportDefaultDeclaration.declaration.type === "ClassProperty" || exportDefaultDeclaration.declaration.type === "ClassPropertyDefinition" || exportDefaultDeclaration.declaration.type === "DeclareClass" || exportDefaultDeclaration.declaration.type === "DeclareExportAllDeclaration" || exportDefaultDeclaration.declaration.type === "DeclareExportDeclaration" || exportDefaultDeclaration.declaration.type === "DeclareInterface" || exportDefaultDeclaration.declaration.type === "DeclareOpaqueType" || exportDefaultDeclaration.declaration.type === "DeclareTypeAlias" || exportDefaultDeclaration.declaration.type === "EnumDeclaration" || exportDefaultDeclaration.declaration.type === "ExportAllDeclaration" || exportDefaultDeclaration.declaration.type === "ExportDeclaration" || exportDefaultDeclaration.declaration.type === "ExportDefaultDeclaration" || exportDefaultDeclaration.declaration.type === "ExportNamedDeclaration" || exportDefaultDeclaration.declaration.type === "FunctionDeclaration" || exportDefaultDeclaration.declaration.type === "ImportDeclaration" || exportDefaultDeclaration.declaration.type === "InterfaceDeclaration" || exportDefaultDeclaration.declaration.type === "MethodDefinition" || exportDefaultDeclaration.declaration.type === "OpaqueType" || exportDefaultDeclaration.declaration.type === "TSCallSignatureDeclaration" || exportDefaultDeclaration.declaration.type === "TSConstructSignatureDeclaration" || exportDefaultDeclaration.declaration.type === "TSDeclareFunction" || exportDefaultDeclaration.declaration.type === "TSDeclareMethod" || exportDefaultDeclaration.declaration.type === "TSEnumDeclaration" || exportDefaultDeclaration.declaration.type === "TSExternalModuleReference" || exportDefaultDeclaration.declaration.type === "TSImportEqualsDeclaration" || exportDefaultDeclaration.declaration.type === "TSIndexSignature" || exportDefaultDeclaration.declaration.type === "TSInterfaceDeclaration" || exportDefaultDeclaration.declaration.type === "TSMethodSignature" || exportDefaultDeclaration.declaration.type === "TSModuleDeclaration" || exportDefaultDeclaration.declaration.type === "TSNamespaceExportDeclaration" || exportDefaultDeclaration.declaration.type === "TSPropertySignature" || exportDefaultDeclaration.declaration.type === "TSTypeAliasDeclaration" || exportDefaultDeclaration.declaration.type === "TSTypeParameterDeclaration" || exportDefaultDeclaration.declaration.type === "TypeAlias" || exportDefaultDeclaration.declaration.type === "VariableDeclaration") {
++    return exportDefaultDeclaration;
++  }
++
++  let expressionKind = exportDefaultDeclaration.declaration.type === "ClassDeclaration" ? j.classExpression.from(exportDefaultDeclaration.declaration) : // : exportDefaultDeclaration.declaration.type === "FunctionDeclaration"
++  // ? j.functionExpression.from(exportDefaultDeclaration.declaration)
++  exportDefaultDeclaration.declaration;
++  return j.expressionStatement(j.assignmentExpression("=", j.memberExpression(j.identifier("module"), j.identifier("exports")), expressionKind));
++};
++
++exports.createExportExpressionStatementFromExportDefaultDeclaration = createExportExpressionStatementFromExportDefaultDeclaration;
+diff --git a/node_modules/@remix-run/dev/dist/cli/migrate/migrations/convert-to-javascript/transform/createImportExpressionStatement.js b/node_modules/@remix-run/dev/dist/cli/migrate/migrations/convert-to-javascript/transform/createImportExpressionStatement.js
+new file mode 100644
+index 0000000..ab066b0
+--- /dev/null
++++ b/node_modules/@remix-run/dev/dist/cli/migrate/migrations/convert-to-javascript/transform/createImportExpressionStatement.js
+@@ -0,0 +1,27 @@
++/**
++ * @remix-run/dev v1.7.0
++ *
++ * Copyright (c) Remix Software Inc.
++ *
++ * This source code is licensed under the MIT license found in the
++ * LICENSE.md file in the root directory of this source tree.
++ *
++ * @license MIT
++ */
++'use strict';
++
++Object.defineProperty(exports, '__esModule', { value: true });
++
++/**
++ * import "foo"
++ * =>
++ * require("foo")
++ */
++const createImportExpressionStatement = (j, {
++  source
++}) => {
++  let callExpression = j.callExpression(j.identifier("require"), [source]);
++  return j.expressionStatement(callExpression);
++};
++
++exports.createImportExpressionStatement = createImportExpressionStatement;
+diff --git a/node_modules/@remix-run/dev/dist/cli/migrate/migrations/convert-to-javascript/transform/createVariableDeclarationIdentifier.js b/node_modules/@remix-run/dev/dist/cli/migrate/migrations/convert-to-javascript/transform/createVariableDeclarationIdentifier.js
+index 1f2897e..2d7a12e 100644
+--- a/node_modules/@remix-run/dev/dist/cli/migrate/migrations/convert-to-javascript/transform/createVariableDeclarationIdentifier.js
++++ b/node_modules/@remix-run/dev/dist/cli/migrate/migrations/convert-to-javascript/transform/createVariableDeclarationIdentifier.js
+@@ -12,6 +12,13 @@
+ 
+ Object.defineProperty(exports, '__esModule', { value: true });
+ 
++/**
++ * import foo from "foo"
++ * import * as foo from "foo"
++ * =>
++ * const foo = require("foo").default
++ * const foo = require("foo")
++ */
+ const createVariableDeclarationIdentifier = (j, {
+   source,
+   specifiers
+@@ -19,6 +26,9 @@ const createVariableDeclarationIdentifier = (j, {
+   var _flatMap$0$local;
+ 
+   let callExpression = j.callExpression(j.identifier("require"), [source]);
++  let isDefaultImport = (specifiers || []).some(({
++    type
++  }) => type === "ImportDefaultSpecifier");
+   return j.variableDeclaration("const", [j.variableDeclarator(j.identifier(((_flatMap$0$local = (specifiers || []
+   /**
+    * HACK: Can't use casts nor type guards in a `jscodeshift` transform
+@@ -27,7 +37,7 @@ const createVariableDeclarationIdentifier = (j, {
+    * So to narrow specifier type, we use `flatMap` instead.
+    * (`filter` can't narrow type without type guards)
+    */
+-  ).flatMap(specifier => specifier.type === "ImportDefaultSpecifier" || specifier.type === "ImportNamespaceSpecifier" ? specifier : [])[0].local) === null || _flatMap$0$local === void 0 ? void 0 : _flatMap$0$local.name) || ""), callExpression)]);
++  ).flatMap(specifier => specifier.type === "ImportDefaultSpecifier" || specifier.type === "ImportNamespaceSpecifier" ? specifier : [])[0].local) === null || _flatMap$0$local === void 0 ? void 0 : _flatMap$0$local.name) || ""), isDefaultImport ? j.memberExpression(callExpression, j.identifier("default")) : callExpression)]);
+ };
+ 
+ exports.createVariableDeclarationIdentifier = createVariableDeclarationIdentifier;
+diff --git a/node_modules/@remix-run/dev/dist/cli/migrate/migrations/convert-to-javascript/transform/createVariableDeclarationObjectPattern.js b/node_modules/@remix-run/dev/dist/cli/migrate/migrations/convert-to-javascript/transform/createVariableDeclarationObjectPattern.js
+index bf4cfbc..9a7ae59 100644
+--- a/node_modules/@remix-run/dev/dist/cli/migrate/migrations/convert-to-javascript/transform/createVariableDeclarationObjectPattern.js
++++ b/node_modules/@remix-run/dev/dist/cli/migrate/migrations/convert-to-javascript/transform/createVariableDeclarationObjectPattern.js
+@@ -12,6 +12,13 @@
+ 
+ Object.defineProperty(exports, '__esModule', { value: true });
+ 
++/**
++ * import { foo } from "foo"
++ * import { foo as bar } from "foo"
++ * =>
++ * const { foo } = require("foo")
++ * const { foo: bar } = require("foo")
++ */
+ const createVariableDeclarationObjectPattern = (j, {
+   source,
+   specifiers
+diff --git a/node_modules/@remix-run/dev/dist/cli/migrate/migrations/convert-to-javascript/transform/index.js b/node_modules/@remix-run/dev/dist/cli/migrate/migrations/convert-to-javascript/transform/index.js
+index 81f188b..ce26ef3 100644
+--- a/node_modules/@remix-run/dev/dist/cli/migrate/migrations/convert-to-javascript/transform/index.js
++++ b/node_modules/@remix-run/dev/dist/cli/migrate/migrations/convert-to-javascript/transform/index.js
+@@ -13,17 +13,19 @@
+ Object.defineProperty(exports, '__esModule', { value: true });
+ 
+ var checkNoDifferentImportTypesCombined = require('./checkNoDifferentImportTypesCombined.js');
+-var createExpressionStatement = require('./createExpressionStatement.js');
++var createExportExpressionStatementFromExportDefaultDeclaration = require('./createExportExpressionStatementFromExportDefaultDeclaration.js');
++var createImportExpressionStatement = require('./createImportExpressionStatement.js');
+ var createVariableDeclarationIdentifier = require('./createVariableDeclarationIdentifier.js');
+ var createVariableDeclarationObjectPattern = require('./createVariableDeclarationObjectPattern.js');
+ 
+ const transform = (file, api, options) => {
+   let j = api.jscodeshift;
+   let root = j(file.source);
+-  let allESImportDeclarations = root.find(j.ImportDeclaration);
++  let allImportDeclarations = root.find(j.ImportDeclaration);
++  let allExportDefaultDeclarations = root.find(j.ExportDefaultDeclaration);
+ 
+-  if (allESImportDeclarations.length === 0) {
+-    // This transform doesn't need to run if there are no ES imports
++  if (allImportDeclarations.length === 0 && allExportDefaultDeclarations.length === 0) {
++    // This transform doesn't need to run if there are no ES imports/exports
+     return null;
+   } // https://github.com/facebook/jscodeshift/blob/main/recipes/retain-first-comment.md
+ 
+@@ -31,26 +33,32 @@ const transform = (file, api, options) => {
+   let getFirstNode = () => root.find(j.Program).get("body", 0).node;
+ 
+   let oldFirstNode = getFirstNode();
+-  allESImportDeclarations.forEach(importDeclaration => {
++  allImportDeclarations.forEach(importDeclaration => {
+     if (importDeclaration.node.importKind === "type") {
+       return;
+     }
+ 
+     let {
+       specifiers
+-    } = importDeclaration.node;
++    } = importDeclaration.node; // import "foo"
+ 
+     if (!specifiers || specifiers.length === 0) {
+-      return j(importDeclaration).replaceWith(createExpressionStatement.createExpressionStatement(j, importDeclaration.node));
+-    }
++      return j(importDeclaration).replaceWith(createImportExpressionStatement.createImportExpressionStatement(j, importDeclaration.node));
++    } // import Foo, { bar } from "foo"
++
+ 
+-    checkNoDifferentImportTypesCombined.checkNoDifferentImportTypesCombined(importDeclaration.node);
++    checkNoDifferentImportTypesCombined.checkNoDifferentImportTypesCombined(importDeclaration.node); // import foo from "foo" || import * as foo from "foo"
+ 
+     if (["ImportDefaultSpecifier", "ImportNamespaceSpecifier"].includes(specifiers[0].type)) {
+       return j(importDeclaration).replaceWith(createVariableDeclarationIdentifier.createVariableDeclarationIdentifier(j, importDeclaration.node));
+-    }
++    } // import { foo } from "foo" || import { foo as bar } from "foo"
++
+ 
+     return j(importDeclaration).replaceWith(createVariableDeclarationObjectPattern.createVariableDeclarationObjectPattern(j, importDeclaration.node));
++  });
++  allExportDefaultDeclarations.forEach(exportDefaultDeclaration => {
++    // export default foo
++    j(exportDefaultDeclaration).replaceWith(createExportExpressionStatementFromExportDefaultDeclaration.createExportExpressionStatementFromExportDefaultDeclaration(j, exportDefaultDeclaration.node));
+   }); // If the first node has been modified or deleted, reattach the comments
+ 
+   let newFirstNode = getFirstNode();
+diff --git a/node_modules/@remix-run/dev/dist/compiler.js b/node_modules/@remix-run/dev/dist/compiler.js
+index 9ce96d5..8820197 100644
+--- a/node_modules/@remix-run/dev/dist/compiler.js
++++ b/node_modules/@remix-run/dev/dist/compiler.js
+@@ -323,6 +323,10 @@ async function createBrowserBuild(config, options) {
+     sourcemap: options.sourcemap,
+     metafile: true,
+     incremental: options.incremental,
++    // As pointed out by https://github.com/evanw/esbuild/issues/2440, when tsconfig is set to
++    // `undefined`, esbuild will keep looking for a tsconfig.json recursively up. This unwanted
++    // behavior can only be avoided by creating an empty tsconfig file in the root directory.
++    tsconfig: config.tsconfigPath,
+     mainFields: ["browser", "module", "main"],
+     treeShaking: true,
+     minify: options.mode === build$1.BuildMode.Production,
+@@ -386,6 +390,10 @@ function createServerBuild(config, options, assetsManifestPromiseRef) {
+     loader: loaders.loaders,
+     bundle: true,
+     logLevel: "silent",
++    // As pointed out by https://github.com/evanw/esbuild/issues/2440, when tsconfig is set to
++    // `undefined`, esbuild will keep looking for a tsconfig.json recursively up. This unwanted
++    // behavior can only be avoided by creating an empty tsconfig file in the root directory.
++    tsconfig: config.tsconfigPath,
+     incremental: options.incremental,
+     sourcemap: options.sourcemap,
+     // use linked (true) to fix up .map file
+diff --git a/node_modules/@remix-run/dev/dist/compiler/plugins/mdx.js b/node_modules/@remix-run/dev/dist/compiler/plugins/mdx.js
+index ed4befe..771cd93 100644
+--- a/node_modules/@remix-run/dev/dist/compiler/plugins/mdx.js
++++ b/node_modules/@remix-run/dev/dist/compiler/plugins/mdx.js
+@@ -49,7 +49,7 @@ function mdxPlugin(config) {
+       build.onResolve({
+         filter: /\.mdx?$/
+       }, args => {
+-        let matchPath = index.createMatchPath(); // Resolve paths according to tsconfig paths property
++        let matchPath = index.createMatchPath(config.tsconfigPath); // Resolve paths according to tsconfig paths property
+ 
+         function resolvePath(id) {
+           if (!matchPath) {
+diff --git a/node_modules/@remix-run/dev/dist/compiler/plugins/serverBareModulesPlugin.js b/node_modules/@remix-run/dev/dist/compiler/plugins/serverBareModulesPlugin.js
+index 07b03f2..d391899 100644
+--- a/node_modules/@remix-run/dev/dist/compiler/plugins/serverBareModulesPlugin.js
++++ b/node_modules/@remix-run/dev/dist/compiler/plugins/serverBareModulesPlugin.js
+@@ -32,7 +32,7 @@ var fs__default = /*#__PURE__*/_interopDefaultLegacy(fs);
+ function serverBareModulesPlugin(remixConfig, onWarning) {
+   let isDenoRuntime = remixConfig.serverBuildTarget === "deno"; // Resolve paths according to tsconfig paths property
+ 
+-  let matchPath = isDenoRuntime ? undefined : index.createMatchPath();
++  let matchPath = isDenoRuntime ? undefined : index.createMatchPath(remixConfig.tsconfigPath);
+ 
+   function resolvePath(id) {
+     if (!matchPath) {
+diff --git a/node_modules/@remix-run/dev/dist/compiler/utils/tsconfig/index.js b/node_modules/@remix-run/dev/dist/compiler/utils/tsconfig/index.js
+index 3443787..b05ec42 100644
+--- a/node_modules/@remix-run/dev/dist/compiler/utils/tsconfig/index.js
++++ b/node_modules/@remix-run/dev/dist/compiler/utils/tsconfig/index.js
+@@ -19,8 +19,16 @@ function _interopDefaultLegacy (e) { return e && typeof e === 'object' && 'defau
+ 
+ var tsConfigPaths__default = /*#__PURE__*/_interopDefaultLegacy(tsConfigPaths);
+ 
+-function createMatchPath() {
+-  let configLoaderResult = tsConfigPaths__default["default"].loadConfig();
++function createMatchPath(tsconfigPath) {
++  // There is no tsconfig to match paths against.
++  if (!tsconfigPath) {
++    return undefined;
++  } // When passing a absolute path, loadConfig assumes that the path contains
++  // a tsconfig file.
++  // Ref.: https://github.com/dividab/tsconfig-paths/blob/v4.0.0/src/__tests__/config-loader.test.ts#L74
++
++
++  let configLoaderResult = tsConfigPaths__default["default"].loadConfig(tsconfigPath);
+ 
+   if (configLoaderResult.resultType === "failed") {
+     if (configLoaderResult.message === "Missing baseUrl in compilerOptions") {
+diff --git a/node_modules/@remix-run/dev/dist/config.js b/node_modules/@remix-run/dev/dist/config.js
+index 4924d80..9fc3b8c 100644
+--- a/node_modules/@remix-run/dev/dist/config.js
++++ b/node_modules/@remix-run/dev/dist/config.js
+@@ -86,6 +86,7 @@ async function readConfig(remixRoot, serverMode = serverModes.ServerMode.Product
+   }
+ 
+   let customServerEntryPoint = appConfig.server;
++  let serverEntryFile = appConfig.serverEntryFile;
+   let serverBuildTarget = appConfig.serverBuildTarget;
+   let serverModuleFormat = appConfig.serverModuleFormat || "cjs";
+   let serverPlatform = appConfig.serverPlatform || "node";
+@@ -207,7 +208,19 @@ async function readConfig(remixRoot, serverMode = serverModes.ServerMode.Product
+   }
+ 
+   let serverBuildTargetEntryModule = `export * from ${JSON.stringify(virtualModules.serverBuildVirtualModule.id)};`;
+-  let serverDependenciesToBundle = appConfig.serverDependenciesToBundle || [];
++  let serverDependenciesToBundle = appConfig.serverDependenciesToBundle || []; // When tsconfigPath is undefined, the default "tsconfig.json" is not
++  // found in the root directory.
++
++  let tsconfigPath;
++  let rootTsconfig = path__namespace.resolve(rootDirectory, "tsconfig.json");
++  let rootJsConfig = path__namespace.resolve(rootDirectory, "jsconfig.json");
++
++  if (fse__namespace.existsSync(rootTsconfig)) {
++    tsconfigPath = rootTsconfig;
++  } else if (fse__namespace.existsSync(rootJsConfig)) {
++    tsconfigPath = rootJsConfig;
++  }
++
+   return {
+     appDirectory,
+     cacheDirectory,
+@@ -229,7 +242,9 @@ async function readConfig(remixRoot, serverMode = serverModes.ServerMode.Product
+     serverEntryPoint: customServerEntryPoint,
+     serverDependenciesToBundle,
+     mdx,
+-    watchPaths
++    watchPaths,
++    tsconfigPath,
++    serverEntryFile
+   };
+ }
+ 
